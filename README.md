@@ -253,7 +253,9 @@ The action runs `cra all`, writes the scope verdict and a table of findings to t
 output directory as the `cra-compliance` artifact and, with `commit: true` on a tag build that passed, commits the
 records to the default branch as `docs(compliance): CRA records for <tag>`. It fails the job with the `cra` exit
 code. Release tags (`v0`, `v0.1.0`, ...) carry the bundled CLI; any other ref (a branch or a commit) is built
-from source first, which needs npm registry access.
+from source first, which needs npm registry access. The action receives your upload token and `GITHUB_TOKEN`, so
+consider pinning the commit a release tag points at, as with any third-party action:
+`uses: override-tech/releasekeep@<commit sha> # v0.1.0` (Dependabot keeps such pins current).
 
 | Input | Default | Meaning |
 | --- | --- | --- |
@@ -309,9 +311,10 @@ The legal rules (scope, product classes, conformity routes, support period, Art.
 They are shared with the hosted ReleaseKeep service, so a fix there reaches both.
 
 Releases: bump `version` in `package.json` through a pull request to `main`, then push the tag `v<version>` on
-the merged commit. The release workflow checks and builds it, stages the npm package through trusted publishing
-and moves the `v<major>` action tag. A maintainer approves the staged version with 2FA on npmjs.com before anyone
-can install it.
+the merged commit. The release workflow checks and builds it with read-only access, stages the npm package
+through trusted publishing in a job that runs no repository or dependency code, and moves the `v<major>` action
+tag in a job that only commits the built bundle. A maintainer approves the staged version with 2FA on npmjs.com
+before anyone can install it.
 
 Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Report a security problem in this
 tool privately, as described in [SECURITY.md](SECURITY.md), not in an issue.
