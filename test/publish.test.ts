@@ -108,6 +108,16 @@ describe("cra publish", () => {
     expect(own.requests[0]?.url).toBe("https://keep.acme.example/api/v1/releases");
   });
 
+  it("never sends the token over plain http except to localhost", async () => {
+    const dir = project();
+    const remote = await publish(dir, ["--to", "http://keep.acme.example"], archived);
+    expect(remote.code).toBe(EXIT.usage);
+    expect(remote.stderr).toContain("https://");
+    expect(remote.requests).toHaveLength(0);
+    const local = await publish(dir, ["--to", "http://localhost:3000"], archived);
+    expect(local.requests[0]?.url).toBe("http://localhost:3000/api/v1/releases");
+  });
+
   it("explains a 409: an archived version never changes", async () => {
     const dir = project();
     const { code, stderr } = await publish(dir, ["--to", "https://cra.example"], {
