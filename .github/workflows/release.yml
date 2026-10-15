@@ -10,29 +10,35 @@ name: release
 # may only stage. A maintainer then approves the staged version with 2FA on
 # npmjs.com (Staged Packages) or with `npm stage approve <id>`; only then is it
 # installable. Provenance is generated automatically.
+#
+# Every Action user runs whatever the vX tag points at, with their upload token
+# and GITHUB_TOKEN. So the jobs are split by privilege: dependencies, lint and
+# tests run in `build` with read-only access; `publish` holds only the OIDC
+# token and runs no repository or dependency code; `tag` holds contents: write
+# and runs no npm code at all, it only commits the built bundle.
 
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
-permissions:
-  contents: write
-  id-token: write # npm trusted publishing (OIDC)
+permissions: {}
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          persist-credentials: true # pushes the action tags below
+          persist-credentials: false
       # setup-node v4 caches only when `cache:` is set; there is none here on
       # purpose (no dependency cache in release builds).
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: # zizmor: ignore[cache-poisoning]
           node-version: 24
-          registry-url: https://registry.npmjs.org
-      - run: npm ci --no-audit --no-fund
+      # No install scripts: esbuild ships its binary as an optional dependency.
+      - run: npm ci --no-audit --no-fund --ignore-scripts
       - run: npm run lint
       - run: npm run type-check
       - run: npm run test:ci
@@ -41,9 +47,36 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: test "v$(node -p 'require("./package.json").version')" = "$TAG"
       - run: npm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cra-bundle
+          path: dist/cra.mjs
+          if-no-files-found: error
+          retention-days: 7
 
-      # `npm stage publish` needs npm 11.15 or later.
-      - run: npm install --global npm@11 # zizmor: ignore[adhoc-packages]
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: # zizmor: ignore[cache-poisoning]
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cra-bundle
+          path: dist
+      # Artifacts drop the mode bit; the bundle is the package's bin.
+      - run: chmod +x dist/cra.mjs
+      # `npm stage publish` needs npm 11.15 or later. Exact version: this job
+      # holds the OIDC token.
+      - run: npm install --global npm@11.21.1 --ignore-scripts # zizmor: ignore[adhoc-packages]
 
       - name: Stage on npm for approval
         run: |
@@ -54,7 +87,9 @@ jobs:
             echo "::notice title=npm::$name@$version is already on npm; nothing to stage."
             exit 0
           fi
-          npm stage publish
+          # The bundle comes from the build job; skip prepack (it would rebuild
+          # and needs the dev dependencies).
+          npm stage publish --ignore-scripts
           {
             echo "### npm: approve $name@$version"
             echo
@@ -63,6 +98,22 @@ jobs:
             echo "\`npm stage list $name\` and \`npm stage approve <id>\`."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=npm::$name@$version is staged. Approve it on npmjs.com with 2FA."
+
+  tag:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: true # pushes the action tags below
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cra-bundle
+          path: dist
+      # Artifacts drop the mode bit; the bundle is the package's bin.
+      - run: chmod +x dist/cra.mjs
 
       - name: Point the action tags at a commit with the bundle
         env:
@@ -89,7 +140,7 @@ jobs:
             gh release upload "$TAG" dist/cra.mjs --clobber
             exit 0
           fi
-          name="$(node -p 'require("./package.json").name')"
+          name="$(jq -r .name package.json)"
           printf 'npm: %s@%s is installable once a maintainer approves the staged version on npmjs.com.\n' \
             "$name" "${TAG#v}" > notes.md
           gh release create "$TAG" dist/cra.mjs --title "$TAG" --notes-file notes.md --generate-notes --verify-tag
