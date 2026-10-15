@@ -95,9 +95,13 @@ export async function publishCommand(
   const base = (flags.to ?? (io.env.RELEASEKEEP_URL?.trim() || DEFAULT_SERVICE))
     .trim()
     .replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(base)) {
+  // The upload token never expires, so it only travels over plain http to a
+  // local instance (development, tests), never across a network.
+  const url = URL.canParse(base) ? new URL(base) : null;
+  const local = url !== null && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url?.protocol !== "https:" && !(url?.protocol === "http:" && local)) {
     throw new UsageError(
-      `--to or RELEASEKEEP_URL must be an http(s) address, e.g. ${DEFAULT_SERVICE}`,
+      `--to or RELEASEKEEP_URL must be an https:// address (http:// only for localhost), e.g. ${DEFAULT_SERVICE}`,
     );
   }
   const project = await loadProject(options, io);
